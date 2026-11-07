@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="src/AeroIsland.Core/AeroIsland.Core.csproj" />
+  <Project Path="src/AeroIsland.Infrastructure/AeroIsland.Infrastructure.csproj" />
+  <Project Path="src/AeroIsland.Windows/AeroIsland.Windows.csproj" />
+  <Project Path="src/AeroIsland.App/AeroIsland.App.csproj" />
+  <Project Path="tests/AeroIsland.UnitTests/AeroIsland.UnitTests.csproj" />
+  <Project Path="tests/AeroIsland.IntegrationTests/AeroIsland.IntegrationTests.csproj" />
+  <Project Path="benchmarks/AeroIsland.Benchmarks/AeroIsland.Benchmarks.csproj" />
+</Solution>
