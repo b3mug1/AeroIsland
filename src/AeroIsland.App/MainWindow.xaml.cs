@@ -53,6 +53,7 @@ public partial class MainWindow : Window
     private BitmapSource? _artworkSource;
     private readonly StackPanel _page = new();
     private ScrollViewer? _pageScroll;
+    private Border? _tabsShell;
     private readonly TextBlock _privacy = new();
     private readonly DispatcherTimer _hover = new();
     private readonly DispatcherTimer _fullscreen = new() { Interval = TimeSpan.FromSeconds(2) };
@@ -72,6 +73,7 @@ public partial class MainWindow : Window
         _settings = settings;
         _media.MaxArtworkBytes = settings.ArtworkCacheMiB * 1024 * 1024;
         _capture = new ClipboardCapture(storage);
+        InitializeActivity();
         BuildShell();
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
@@ -103,6 +105,7 @@ public partial class MainWindow : Window
         _native.Start(_settings);
         _native.ClipboardUpdated += OnClipboardUpdated;
         _native.HotkeyPressed += (_, _) => Open();
+        _native.ClipboardHotkeyPressed += (_, _) => OpenQuickClipboard();
         _native.DpiChanged += (_, _) => Dispatcher.BeginInvoke((Action)Place);
     }
 
@@ -120,6 +123,7 @@ public partial class MainWindow : Window
             _history.Insert(0, item);
             await PersistHistoryAsync();
             if (_activePage == "Clipboard" && _expanded) ShowPage("Clipboard");
+            ShowTransient("Saved to history", "Clipboard");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.COMException) { }
     }
@@ -175,32 +179,97 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowCompact(Brush foreground)
+    private void ShowCompact(Brush foreground, bool animate = true)
     {
         if (_pageScroll is not null) _pageScroll.Content = null;
         _root.Children.Clear();
         _root.RowDefinitions.Clear();
         _navButtons.Clear();
+        _tabsShell = null;
+        _compactRing = null;
+        _compactClock = null;
+        _focusRing = null;
+        _focusClock = null;
+        _statusText = null;
+        var mode = CurrentActivity;
         var grid = new Grid { Cursor = Cursors.Hand };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(37) });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var mark = BrandMark(27);
+        FrameworkElement mark;
+        if (mode is CompactActivity.Focus or CompactActivity.Music)
+        {
+            var display = new Grid { Width = 31, Height = 31, VerticalAlignment = VerticalAlignment.Center };
+            var progress = mode == CompactActivity.Focus
+                ? _focusTimer.Progress(DateTimeOffset.UtcNow)
+                : _snapshot is { Duration: { Ticks: > 0 } } media
+                    ? Math.Clamp(media.Position.TotalMilliseconds / media.Duration.TotalMilliseconds, 0, 1) : 0;
+            display.Children.Add(CreateCompactRing(progress));
+            if (mode == CompactActivity.Music && _artworkSource is not null)
+            {
+                display.Children.Add(new Border
+                {
+                    Width = 22,
+                    Height = 22,
+                    CornerRadius = new CornerRadius(11),
+                    Background = new ImageBrush(_artworkSource) { Stretch = Stretch.UniformToFill },
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+            }
+            else display.Children.Add(new TextBlock
+            {
+                Text = mode == CompactActivity.Focus ? "●" : "♫",
+                Foreground = Accent(),
+                FontSize = mode == CompactActivity.Focus ? 12 : 16,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            mark = display;
+        }
+        else if (mode == CompactActivity.Event)
+            mark = new Border
+            {
+                Width = 27,
+                Height = 27,
+                CornerRadius = new CornerRadius(14),
+                Background = AccentSoft(),
+                Child = new TextBlock
+                {
+                    Text = "✓", Foreground = Accent(), FontSize = 15,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+        else mark = BrandMark(27);
         Grid.SetColumn(mark, 0);
         grid.Children.Add(mark);
         var titleStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        titleStack.Children.Add(new TextBlock
+        var title = new TextBlock
         {
-            Text = _snapshot?.Title is { Length: > 0 } title ? title : "AeroIsland",
+            Text = mode switch
+            {
+                CompactActivity.Event => _transientMessage ?? "AeroIsland",
+                CompactActivity.Focus => FormatRemaining(_focusTimer.Remaining(DateTimeOffset.UtcNow)),
+                CompactActivity.Music => _snapshot?.Title is { Length: > 0 } track ? track : "Now playing",
+                _ => "AeroIsland"
+            },
             Foreground = foreground,
             FontSize = 12,
             FontWeight = FontWeights.SemiBold,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxWidth = Math.Max(80, Width - 100)
-        });
+        };
+        if (mode == CompactActivity.Focus) _compactClock = title;
+        titleStack.Children.Add(title);
         titleStack.Children.Add(new TextBlock
         {
-            Text = _snapshot is null ? "DESKTOP COMPANION" : _snapshot.Artist.ToUpperInvariant(),
+            Text = mode switch
+            {
+                CompactActivity.Event => "AEROISLAND",
+                CompactActivity.Focus => _focusTimer.Phase == FocusTimerPhase.Paused ? "FOCUS PAUSED" : "FOCUS SESSION",
+                CompactActivity.Music => _snapshot?.Artist.ToUpperInvariant() ?? "MEDIA",
+                _ => "READY WHEN YOU ARE"
+            },
             Foreground = Muted(),
             FontSize = 8,
             FontWeight = FontWeights.SemiBold,
@@ -210,6 +279,26 @@ public partial class MainWindow : Window
         Grid.SetColumn(titleStack, 1);
         grid.Children.Add(titleStack);
         var activity = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        if (mode == CompactActivity.Focus)
+        {
+            var toggle = Button(_focusTimer.Phase == FocusTimerPhase.Running ? "Ⅱ" : "▶", ToggleFocus);
+            toggle.Width = 28; toggle.Height = 28;
+            toggle.Padding = new Thickness(0); toggle.Margin = new Thickness(0);
+            toggle.Background = AccentSoft(); toggle.Foreground = Accent();
+            AutomationProperties.SetName(toggle, _focusTimer.Phase == FocusTimerPhase.Running ? "Pause focus timer" : "Resume focus timer");
+            activity.Children.Add(toggle);
+        }
+        else if (mode == CompactActivity.Music && _snapshot?.CanPlayPause == true)
+        {
+            var toggle = Button("Ⅱ", async () => await SafeMediaAsync(_media.ToggleAsync));
+            toggle.Width = 28; toggle.Height = 28;
+            toggle.Padding = new Thickness(0); toggle.Margin = new Thickness(0);
+            toggle.Background = AccentSoft(); toggle.Foreground = Accent();
+            AutomationProperties.SetName(toggle, "Pause music");
+            activity.Children.Add(toggle);
+        }
+        else
+        {
         var dot = new Border
         {
             Width = 6,
@@ -234,12 +323,15 @@ public partial class MainWindow : Window
             Margin = new Thickness(8, -5, 0, 0)
         };
         activity.Children.Add(chevron);
+        }
         Grid.SetColumn(activity, 2);
         grid.Children.Add(activity);
         _root.Children.Add(grid);
-        grid.MouseLeftButtonUp += (_, _) => Open();
+        grid.MouseLeftButtonUp += (_, e) => { if (!IsInsideButton(e.OriginalSource as DependencyObject)) Open(); };
         AutomationProperties.SetName(grid, "AeroIsland. Open controls");
-        FadeIn(_root, 0);
+        if (animate) FadeIn(_root, 0);
+        else { _root.BeginAnimation(OpacityProperty, null); _root.Opacity = 1; }
+        UpdateActivityVisuals();
     }
 
     public void Open()
@@ -247,6 +339,11 @@ public partial class MainWindow : Window
         _hiddenToTray = false;
         if (!_expanded)
         {
+            _activePage = ContextPage;
+            _requestedPage = null;
+            _transientTimer.Stop();
+            _transientMessage = null;
+            _transientPage = null;
             _expanded = true;
             _surface.Opacity = 1;
             _surface.Effect = new DropShadowEffect
@@ -272,7 +369,8 @@ public partial class MainWindow : Window
         _media.TimelineUpdatesEnabled = false;
         _timelineTimer.Stop();
         ShowCompact(_settings.Theme == IslandTheme.Light ? Brushes.Black : Brushes.White);
-        AnimateWindow(_settings.CapsuleWidth * _settings.Scale, 50 * _settings.Scale);
+        AnimateWindow((_transientMessage is null ? _settings.CapsuleWidth : Math.Max(_settings.CapsuleWidth, 310)) * _settings.Scale,
+            (_transientMessage is null ? 50 : 58) * _settings.Scale);
         _surface.Effect = null;
     }
 
@@ -281,9 +379,10 @@ public partial class MainWindow : Window
 
     private static double PageHeight(string page) => page switch
     {
-        "Island" => 416,
+        "Island" => 490,
+        "Focus" => 454,
         "Music" => 390,
-        "Clipboard" => 496,
+        "Clipboard" => 530,
         "Settings" => 540,
         _ => 416
     };
@@ -299,10 +398,8 @@ public partial class MainWindow : Window
             Place();
             return;
         }
-        var duration = TimeSpan.FromMilliseconds(_settings.AnimationDurationMs);
-        IEasingFunction easing = spring
-            ? new BackEase { Amplitude = 0.22, EasingMode = EasingMode.EaseOut }
-            : new CubicEase { EasingMode = EasingMode.EaseOut };
+        var duration = TimeSpan.FromMilliseconds(_settings.AnimationDurationMs * (spring ? 1.1 : 1));
+        IEasingFunction easing = new SineEase { EasingMode = EasingMode.EaseInOut };
         BeginAnimation(WidthProperty, new DoubleAnimation(targetWidth, duration) { EasingFunction = easing }, HandoffBehavior.SnapshotAndReplace);
         BeginAnimation(HeightProperty, new DoubleAnimation(targetHeight, duration) { EasingFunction = easing }, HandoffBehavior.SnapshotAndReplace);
     }
@@ -313,18 +410,20 @@ public partial class MainWindow : Window
         if (!MotionEnabled) { element.Opacity = 1; return; }
         element.Opacity = 0;
         element.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1,
-            TimeSpan.FromMilliseconds(Math.Min(240, _settings.AnimationDurationMs)))
+            TimeSpan.FromMilliseconds(Math.Min(340, _settings.AnimationDurationMs)))
         { BeginTime = TimeSpan.FromMilliseconds(delayMs), EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
         if (offset == 0) return;
         var transform = new TranslateTransform(0, offset);
         element.RenderTransform = transform;
         transform.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(offset, 0,
-            TimeSpan.FromMilliseconds(Math.Min(240, _settings.AnimationDurationMs)))
+            TimeSpan.FromMilliseconds(Math.Min(340, _settings.AnimationDurationMs)))
         { BeginTime = TimeSpan.FromMilliseconds(delayMs), EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
     }
 
     private void ShowExpanded()
     {
+        _compactRing = null;
+        _compactClock = null;
         if (_pageScroll is not null) _pageScroll.Content = null;
         _root.Children.Clear();
         _root.RowDefinitions.Clear();
@@ -363,7 +462,8 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 6, 0),
             VerticalAlignment = VerticalAlignment.Center
         });
-        statusRow.Children.Add(new TextBlock { Text = "READY", Foreground = Muted(), FontSize = 9, FontWeight = FontWeights.Bold });
+        _statusText = new TextBlock { Text = "READY", Foreground = Muted(), FontSize = 9, FontWeight = FontWeights.Bold };
+        statusRow.Children.Add(_statusText);
         status.Child = statusRow;
         Grid.SetColumn(status, 2);
         header.Children.Add(status);
@@ -377,15 +477,15 @@ public partial class MainWindow : Window
         header.Children.Add(close);
         _root.Children.Add(header);
         var tabs = new Grid();
-        for (var index = 0; index < 4; index++) tabs.ColumnDefinitions.Add(new ColumnDefinition());
-        var names = new[] { "Island", "Music", "Clipboard", "Settings" };
+        for (var index = 0; index < 5; index++) tabs.ColumnDefinitions.Add(new ColumnDefinition());
+        var names = new[] { "Island", "Focus", "Music", "Clipboard", "Settings" };
         for (var index = 0; index < names.Length; index++)
         {
             var name = names[index];
             var tab = Button(name, () => ShowPage(name));
             tab.Margin = new Thickness(3);
             tab.Padding = new Thickness(5, 8, 5, 8);
-            tab.FontSize = 11;
+            tab.FontSize = 10;
             tab.BorderThickness = new Thickness(0);
             Grid.SetColumn(tab, index);
             tabs.Children.Add(tab);
@@ -399,6 +499,7 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 0, 17),
             ClipToBounds = true
         };
+        _tabsShell = tabsShell;
         Grid.SetRow(tabsShell, 1);
         _root.Children.Add(tabsShell);
         var scroll = new ScrollViewer
@@ -420,8 +521,12 @@ public partial class MainWindow : Window
     {
         var changed = _activePage != page;
         _activePage = page;
+        if (page != "Clipboard") _quickClipboardMode = false;
+        if (_tabsShell is not null) _tabsShell.Visibility = _quickClipboardMode ? Visibility.Collapsed : Visibility.Visible;
         _media.TimelineUpdatesEnabled = _expanded && page == "Music";
-        if (page != "Music") _timelineTimer.Stop();
+        if (page != "Music") { _timelineTimer.Stop(); _timeline = null; }
+        _focusRing = null;
+        _focusClock = null;
         foreach (var (name, tab) in _navButtons)
         {
             var accent = ((SolidColorBrush)Accent()).Color;
@@ -430,7 +535,7 @@ public partial class MainWindow : Window
             {
                 if (MotionEnabled)
                     brush.BeginAnimation(SolidColorBrush.ColorProperty,
-                        new ColorAnimation(target, TimeSpan.FromMilliseconds(210))
+                        new ColorAnimation(target, TimeSpan.FromMilliseconds(300))
                         { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } });
                 else brush.Color = target;
             }
@@ -442,6 +547,7 @@ public partial class MainWindow : Window
         switch (page)
         {
             case "Island": ShowIsland(); break;
+            case "Focus": ShowFocus(); break;
             case "Music": ShowMusic(); break;
             case "Clipboard": ShowClipboard(); break;
             case "Settings": ShowSettings(); break;
@@ -511,8 +617,12 @@ public partial class MainWindow : Window
             _settings.ClipboardEnabled ? (_settings.ClipboardPaused ? "History paused" : $"{_history.Count} items saved") : "History is off",
             _settings.ClipboardEnabled ? "Stored only on this device" : "Enable it whenever you need it",
             () => ShowPage("Clipboard")));
-        FadeIn(_page.Children[^2], 11, 100);
-        FadeIn(_page.Children[^1], 11, 155);
+        _page.Children.Insert(2, Card("◷", "FOCUS TIMER",
+            _focusTimer.Phase == FocusTimerPhase.Idle ? "Start a focus session" : "Focus session active",
+            _focusTimer.Phase == FocusTimerPhase.Paused ? "Paused" : "5, 25 or 50 minutes", () => ShowPage("Focus")));
+        FadeIn(_page.Children[^3], 11, 100);
+        FadeIn(_page.Children[^2], 11, 150);
+        FadeIn(_page.Children[^1], 11, 200);
         var footer = new Grid { Margin = new Thickness(3, 13, 3, 0) };
         footer.ColumnDefinitions.Add(new ColumnDefinition());
         footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -534,7 +644,7 @@ public partial class MainWindow : Window
         Grid.SetColumn(local, 1);
         footer.Children.Add(local);
         _page.Children.Add(footer);
-        FadeIn(footer, 6, 210);
+        FadeIn(footer, 6, 250);
     }
 
     private void ShowMusic()
@@ -542,6 +652,8 @@ public partial class MainWindow : Window
         PageHeading("MEDIA CONTROL", "Your music", "Playback, without leaving your flow.");
         if (_snapshot is null)
         {
+            _timelineTimer.Stop();
+            _timeline = null;
             var empty = new StackPanel { Margin = new Thickness(20, 18, 20, 18), HorizontalAlignment = HorizontalAlignment.Center };
             empty.Children.Add(new TextBlock
             {
@@ -579,17 +691,32 @@ public partial class MainWindow : Window
             return;
         }
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 10) };
-        var artwork = new Image { Width = 72, Height = 72, Margin = new Thickness(0, 0, 14, 0), Source = _artworkSource };
-        RenderOptions.SetBitmapScalingMode(artwork, BitmapScalingMode.LowQuality);
+        var artwork = new Border
+        {
+            Width = 72,
+            Height = 72,
+            CornerRadius = new CornerRadius(17),
+            Margin = new Thickness(0, 0, 14, 0),
+            Background = _artworkSource is null ? AccentSoft() : new ImageBrush(_artworkSource) { Stretch = Stretch.UniformToFill }
+        };
+        if (_artworkSource is null)
+            artwork.Child = new TextBlock
+            {
+                Text = "♫", FontSize = 31, Foreground = Accent(),
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
+            };
+        RenderOptions.SetBitmapScalingMode(artwork, BitmapScalingMode.HighQuality);
         row.Children.Add(artwork);
         var track = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        track.Children.Add(new TextBlock { Text = _snapshot.Title, FontWeight = FontWeights.SemiBold, Foreground = ForegroundBrush() });
-        track.Children.Add(new TextBlock { Text = _snapshot.Artist, Foreground = Muted() });
+        track.Children.Add(new TextBlock { Text = _snapshot.Title, FontWeight = FontWeights.SemiBold, Foreground = ForegroundBrush(), TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 });
+        track.Children.Add(new TextBlock { Text = _snapshot.Artist, Foreground = Muted(), TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 });
         row.Children.Add(track);
         _page.Children.Add(row);
+        FadeIn(row, 8, 40);
         var controls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
         var previous = Button("⏮", async () => await SafeMediaAsync(_media.PreviousAsync)); previous.IsEnabled = _snapshot.CanPrevious;
         var play = Button(_snapshot.IsPlaying ? "⏸" : "▶", async () => await SafeMediaAsync(_media.ToggleAsync)); play.IsEnabled = _snapshot.CanPlayPause;
+        play.Background = Accent(); play.Foreground = AccentInk();
         var next = Button("⏭", async () => await SafeMediaAsync(_media.NextAsync)); next.IsEnabled = _snapshot.CanNext;
         foreach (var button in new[] { previous, play, next }) { button.Margin = new Thickness(5); controls.Children.Add(button); }
         _page.Children.Add(controls);
@@ -607,6 +734,7 @@ public partial class MainWindow : Window
         ChoiceField("Media source", _media.SessionIds, _snapshot.SessionId,
             id => { _media.ChooseSession(id); return Task.CompletedTask; });
         if (_snapshot.IsPlaying && _settings.ShowTimeline) _timelineTimer.Start();
+        else _timelineTimer.Stop();
     }
 
     private async Task SafeMediaAsync(Func<Task> command)
@@ -616,6 +744,12 @@ public partial class MainWindow : Window
 
     private void ShowMedia(MediaSnapshot? state)
     {
+        var previous = _snapshot;
+        var trackChanged = previous?.SessionId != state?.SessionId || previous?.Title != state?.Title ||
+            previous?.Artist != state?.Artist;
+        var visualChanged = trackChanged || previous?.IsPlaying != state?.IsPlaying ||
+            previous?.Duration != state?.Duration || !ReferenceEquals(previous?.Artwork, state?.Artwork);
+        _mediaSampleUtc = DateTimeOffset.UtcNow;
         _snapshot = state;
         if (state?.Artwork is { Length: > 0 } bytes && _settings.ShowArtwork)
         {
@@ -634,26 +768,44 @@ public partial class MainWindow : Window
             catch (Exception e) when (e is IOException or NotSupportedException) { _artworkSource = null; }
         }
         else _artworkSource = null;
-        if (!_expanded) ShowCompact(ForegroundBrush());
-        else if (_activePage is "Music" or "Island") ShowPage(_activePage);
+        if (!_expanded && visualChanged) ShowCompact(ForegroundBrush(), trackChanged);
+        else if (_expanded && visualChanged && _activePage is "Music" or "Island") ShowPage(_activePage);
+        else if (_expanded && _activePage == "Music" && _timeline is { } slider && state is not null)
+        {
+            slider.Maximum = Math.Max(1, state.Duration.TotalSeconds);
+            slider.Value = Math.Clamp(state.Position.TotalSeconds, 0, slider.Maximum);
+        }
+        RefreshActivityTimer();
     }
 
     private void ShowClipboard()
     {
-        PageHeading("YOUR HISTORY", "Clipboard", "Save what matters. Keep it on this device.");
+        PageHeading("YOUR HISTORY", _quickClipboardMode ? "Quick clipboard" : "Clipboard",
+            _quickClipboardMode ? "Three recent items. Search to see more." : "Save what matters. Keep it on this device.");
         _privacy.Text = _settings.ClipboardEnabled ? (_settings.ClipboardPaused ? "History paused" : "History on · stored on this device") : "History off · enable it to start saving";
         _privacy.Foreground = _settings.ClipboardEnabled && !_settings.ClipboardPaused ? Accent() : Muted();
         _privacy.Margin = new Thickness(0, 4, 0, 12);
-        _page.Children.Add(_privacy);
+        if (!_quickClipboardMode) _page.Children.Add(_privacy);
         var actions = new WrapPanel();
         actions.Children.Add(Button(_settings.ClipboardEnabled ? "Turn off" : "Enable history", async () => { _settings = _settings with { ClipboardEnabled = !_settings.ClipboardEnabled }; await SaveSettingsAsync(); ShowPage("Clipboard"); }));
         actions.Children.Add(Button(_settings.ClipboardPaused ? "Resume" : "Pause", async () => { _settings = _settings with { ClipboardPaused = !_settings.ClipboardPaused }; await SaveSettingsAsync(); ShowPage("Clipboard"); }));
         actions.Children.Add(Button("Clear unpinned", async () => { foreach (var x in _history.Where(x => !x.Pinned).ToArray()) _history.Remove(x); await PersistHistoryAsync(); ShowPage("Clipboard"); }));
         actions.Children.Add(Button("Clear all", async () => { _history.Clear(); await PersistHistoryAsync(); ShowPage("Clipboard"); }));
-        _page.Children.Add(actions);
+        if (!_quickClipboardMode) _page.Children.Add(actions);
+        else if (!_settings.ClipboardEnabled)
+            _page.Children.Add(Button("Enable history", async () =>
+            {
+                _settings = _settings with { ClipboardEnabled = true };
+                await SaveSettingsAsync();
+                ShowPage("Clipboard");
+            }));
+        if (_quickClipboardMode)
+        {
+            _page.Children.Add(Button("Show all history", () => { _quickClipboardMode = false; ShowPage("Clipboard"); }));
+        }
         var search = new TextBox
         {
-            Margin = new Thickness(0, 12, 0, 10),
+            Margin = new Thickness(0),
             Style = (Style)FindResource("IslandTextBox"),
             Background = Surface2(),
             Foreground = ForegroundBrush(),
@@ -661,8 +813,20 @@ public partial class MainWindow : Window
             ToolTip = "Search history"
         };
         AutomationProperties.SetName(search, "Search clipboard history");
-        search.TextChanged += (_, _) => RenderHistory(search.Text);
-        _page.Children.Add(search);
+        var searchShell = new Grid { Margin = new Thickness(0, _quickClipboardMode ? 4 : 12, 0, 10) };
+        searchShell.Children.Add(search);
+        var placeholder = new TextBlock
+        {
+            Text = "Search history",
+            Foreground = Muted(),
+            FontSize = 12,
+            Margin = new Thickness(12, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsHitTestVisible = false
+        };
+        searchShell.Children.Add(placeholder);
+        search.TextChanged += (_, _) => { placeholder.Visibility = search.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed; RenderHistory(search.Text); };
+        _page.Children.Add(searchShell);
         _historyHost = new StackPanel();
         _page.Children.Add(_historyHost);
         RenderHistory("");
@@ -673,17 +837,41 @@ public partial class MainWindow : Window
     {
         if (_historyHost is null) return;
         _historyHost.Children.Clear();
-        foreach (var item in _history.Where(x => x.Preview.Contains(query, StringComparison.OrdinalIgnoreCase)))
+        var normalizedQuery = query.Trim();
+        var matches = _history.Where(x => x.Preview.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase));
+        if (_quickClipboardMode && normalizedQuery.Length == 0) matches = matches.Take(3);
+        foreach (var item in matches)
         {
-            var card = new StackPanel { Background = Surface2(), Margin = new Thickness(0, 0, 0, 7) };
-            card.Children.Add(Label(item.Preview, 12));
-            card.Children.Add(Label(item.CreatedUtc.ToLocalTime().ToString("g"), 10));
+            var card = new StackPanel();
+            card.Children.Add(new TextBlock
+            {
+                Text = item.Preview,
+                Foreground = ForegroundBrush(),
+                FontSize = 12,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(0, 0, 0, 3)
+            });
+            if (!_quickClipboardMode) card.Children.Add(Label(item.CreatedUtc.ToLocalTime().ToString("g"), 10));
             var actions = new WrapPanel();
-            actions.Children.Add(Button("Copy", () => { try { _capture.Restore(item); } catch (Exception e) when (e is IOException or System.Runtime.InteropServices.ExternalException) { } }));
+            actions.Children.Add(Button("Copy", () =>
+            {
+                try { _capture.Restore(item); ShowTransient("Copied to clipboard", "Clipboard"); }
+                catch (Exception e) when (e is IOException or System.Runtime.InteropServices.ExternalException) { }
+            }));
             actions.Children.Add(Button(item.Pinned ? "Unpin" : "Pin", async () => { var index = _history.IndexOf(item); if (index >= 0) _history[index] = item with { Pinned = !item.Pinned }; await PersistHistoryAsync(); ShowPage("Clipboard"); }));
-            actions.Children.Add(Button("Delete", async () => { _history.Remove(item); await PersistHistoryAsync(); ShowPage("Clipboard"); }));
+            if (!_quickClipboardMode)
+                actions.Children.Add(Button("Delete", async () => { _history.Remove(item); await PersistHistoryAsync(); ShowPage("Clipboard"); }));
             card.Children.Add(actions);
-            _historyHost.Children.Add(card);
+            _historyHost.Children.Add(new Border
+            {
+                Child = card,
+                Background = Surface2(),
+                BorderBrush = Outline(),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(10, 8, 10, 4),
+                Margin = new Thickness(0, 0, 0, 7)
+            });
         }
         if (_historyHost.Children.Count == 0) _historyHost.Children.Add(Label("No saved items", 12));
     }
@@ -724,6 +912,8 @@ public partial class MainWindow : Window
             ChoiceField("Keyboard shortcut", new[] { "Ctrl+Alt+Space", "Ctrl+Shift+Space" }, _settings.Hotkey,
                 async value => { _settings = _settings with { Hotkey = value }; _native?.RegisterShortcut(value); await SaveSettingsAsync(); });
             if (_native?.HotkeyAvailable == false) _page.Children.Add(Label("Shortcut unavailable. Another app may already use it.", 11));
+            _page.Children.Add(Label("Quick clipboard: Ctrl+Alt+V", 11));
+            if (_native?.ClipboardHotkeyAvailable == false) _page.Children.Add(Label("Quick clipboard shortcut unavailable. Another app may already use it.", 11));
             var screens = System.Windows.Forms.Screen.AllScreens;
             var monitors = screens.Select(x => x.DeviceName).ToArray();
             var selectedMonitor = monitors.Contains(_settings.MonitorDeviceName) ? _settings.MonitorDeviceName :
@@ -762,7 +952,7 @@ public partial class MainWindow : Window
             SliderSetting("Capsule width", _settings.CapsuleWidth, 150, 450, async value => { _settings = _settings with { CapsuleWidth = (int)value }; await SaveSettingsAsync(); });
             SliderSetting("Capsule opacity", _settings.Opacity, 0.65, 1, async value => { _settings = _settings with { Opacity = value }; await SaveSettingsAsync(); });
             SliderSetting("Corner radius", _settings.CornerRadius, 8, 36, async value => { _settings = _settings with { CornerRadius = (int)value }; _surface.CornerRadius = new CornerRadius(value); if (_native is not null) _native.CornerRadius = value; await SaveSettingsAsync(); });
-            SliderSetting("Animation ms", _settings.AnimationDurationMs, 0, 500, async value => { _settings = _settings with { AnimationDurationMs = (int)value }; await SaveSettingsAsync(); });
+            SliderSetting("Animation ms", _settings.AnimationDurationMs, 0, 700, async value => { _settings = _settings with { AnimationDurationMs = (int)value }; await SaveSettingsAsync(); });
             _page.Children.Add(Label("Accent color · #RRGGBB", 11));
             var accent = new TextBox
             {
@@ -812,7 +1002,7 @@ public partial class MainWindow : Window
         }
         if (_settingsSection == "About")
         {
-            _page.Children.Add(Label("AeroIsland 0.1.3", 12));
+            _page.Children.Add(Label("AeroIsland 0.2.0", 12));
             _page.Children.Add(Label(_storage.DirectoryPath, 10));
             _page.Children.Add(Label("No telemetry. Clipboard data stays on this device.", 11));
         }
@@ -1154,10 +1344,10 @@ public partial class MainWindow : Window
         if (card.Background is not SolidColorBrush brush) return;
         if (!MotionEnabled) { brush.Color = target; return; }
         brush.BeginAnimation(SolidColorBrush.ColorProperty,
-            new ColorAnimation(target, TimeSpan.FromMilliseconds(190)));
+            new ColorAnimation(target, TimeSpan.FromMilliseconds(300)));
         if (card.RenderTransform is ScaleTransform scale)
         {
-            var animation = new DoubleAnimation(hovered ? 1.018 : 1, TimeSpan.FromMilliseconds(190))
+            var animation = new DoubleAnimation(hovered ? 1.018 : 1, TimeSpan.FromMilliseconds(300))
             { EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut } };
             scale.BeginAnimation(ScaleTransform.ScaleXProperty, animation);
             scale.BeginAnimation(ScaleTransform.ScaleYProperty, animation);
@@ -1280,7 +1470,7 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
-        _hover.Stop(); _fullscreen.Stop(); _timelineTimer.Stop();
+        _hover.Stop(); _fullscreen.Stop(); _timelineTimer.Stop(); _activityTimer.Stop(); _transientTimer.Stop();
         _native?.Dispose(); _media.Dispose();
         if (_tray is not null) { _tray.Visible = false; _tray.Dispose(); }
         if (!_exiting) Application.Current.Shutdown();

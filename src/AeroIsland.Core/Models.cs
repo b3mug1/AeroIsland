@@ -7,7 +7,7 @@ public enum HistoryKind { Text, Url, Image }
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 2;
+    public int SchemaVersion { get; init; } = 3;
     public bool ClipboardEnabled { get; init; }
     public bool ClipboardPaused { get; init; }
     public bool StartWithWindows { get; init; }
@@ -25,7 +25,7 @@ public sealed record AppSettings
     public double Opacity { get; init; } = 1;
     public bool AnimationsEnabled { get; init; } = true;
     public bool ReducedMotion { get; init; }
-    public int AnimationDurationMs { get; init; } = 340;
+    public int AnimationDurationMs { get; init; } = 440;
     public bool ShowArtwork { get; init; } = true;
     public bool ShowTimeline { get; init; } = true;
     public int ArtworkCacheMiB { get; init; } = 8;
@@ -39,13 +39,15 @@ public sealed record AppSettings
 
     public AppSettings Validate() => this with
     {
-        SchemaVersion = 2,
+        SchemaVersion = 3,
         HoverDelayMs = Math.Clamp(HoverDelayMs, 100, 2000),
         CapsuleWidth = Math.Clamp(CapsuleWidth, 150, 450),
         Scale = double.IsFinite(Scale) ? Math.Clamp(Scale, 0.75, 1.5) : 1,
         CornerRadius = Math.Clamp(SchemaVersion < 2 && CornerRadius == 22 ? 28 : CornerRadius, 8, 36),
         Opacity = double.IsFinite(Opacity) ? Math.Clamp(Opacity, 0.65, 1) : 1,
-        AnimationDurationMs = Math.Clamp(SchemaVersion < 2 && AnimationDurationMs == 240 ? 340 : AnimationDurationMs, 0, 500),
+        AnimationDurationMs = Math.Clamp(
+            SchemaVersion < 2 && AnimationDurationMs == 240 ? 440 :
+            SchemaVersion < 3 && AnimationDurationMs == 340 ? 440 : AnimationDurationMs, 0, 700),
         ArtworkCacheMiB = Math.Clamp(ArtworkCacheMiB, 1, 64),
         MaxHistoryItems = Math.Clamp(MaxHistoryItems, 10, 500),
         MaxTextLength = Math.Clamp(MaxTextLength, 100, 100_000),

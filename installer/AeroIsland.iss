@@ -1,5 +1,5 @@
 #define AppName "AeroIsland"
-#define AppVersion "0.1.3"
+#define AppVersion "0.2.0"
 #define SourceDir "..\src\AeroIsland.App\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish"
 [Setup]
 AppId={{B084B0A4-EF36-4D87-9BE6-71BA3E70B861}

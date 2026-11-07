@@ -26,15 +26,35 @@ public sealed class CoreTests
             CornerRadius = 22,
             AnimationDurationMs = 240
         }.Validate();
-        Assert.Equal(2, previous.SchemaVersion);
+        Assert.Equal(3, previous.SchemaVersion);
         Assert.Equal("#B9A6FF", previous.AccentColor);
         Assert.Equal(28, previous.CornerRadius);
-        Assert.Equal(340, previous.AnimationDurationMs);
+        Assert.Equal(440, previous.AnimationDurationMs);
         Assert.Equal("#FF6633", new AppSettings
         {
             SchemaVersion = 1,
             AccentColor = "#FF6633"
         }.Validate().AccentColor);
+    }
+
+    [Fact]
+    public void Focus_timer_pauses_resumes_and_completes_at_the_deadline()
+    {
+        var timer = new FocusTimer();
+        var start = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        timer.Start(TimeSpan.FromMinutes(5), start);
+        Assert.Equal(FocusTimerPhase.Running, timer.Phase);
+        Assert.Equal(TimeSpan.FromMinutes(3), timer.Remaining(start.AddMinutes(2)));
+        Assert.Equal(0.4, timer.Progress(start.AddMinutes(2)), 5);
+
+        timer.Pause(start.AddMinutes(2));
+        Assert.Equal(TimeSpan.FromMinutes(3), timer.Remaining(start.AddHours(1)));
+        Assert.False(timer.CompleteIfElapsed(start.AddHours(1)));
+
+        timer.Resume(start.AddHours(1));
+        Assert.False(timer.CompleteIfElapsed(start.AddHours(1).AddMinutes(2)));
+        Assert.True(timer.CompleteIfElapsed(start.AddHours(1).AddMinutes(3)));
+        Assert.Equal(FocusTimerPhase.Idle, timer.Phase);
     }
 
     [Fact]

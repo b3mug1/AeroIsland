@@ -14,13 +14,16 @@ public sealed class NativeWindow : IDisposable
     private const int WmNcHitTest = 0x0084;
     private const int WmDpiChanged = 0x02E0;
     private const int HotkeyId = 0xA310;
+    private const int ClipboardHotkeyId = 0xA311;
     private readonly Window _window;
     private HwndSource? _source;
     private IntPtr _handle;
     public event EventHandler? ClipboardUpdated;
     public event EventHandler? HotkeyPressed;
+    public event EventHandler? ClipboardHotkeyPressed;
     public event EventHandler? DpiChanged;
     public bool HotkeyAvailable { get; private set; }
+    public bool ClipboardHotkeyAvailable { get; private set; }
     public double CornerRadius { get; set; } = 22;
 
     public NativeWindow(Window window) => _window = window;
@@ -32,6 +35,7 @@ public sealed class NativeWindow : IDisposable
         _source?.AddHook(WndProc);
         AddClipboardFormatListener(_handle);
         RegisterShortcut(settings.Hotkey);
+        ClipboardHotkeyAvailable = RegisterHotKey(_handle, ClipboardHotkeyId, 0x0002u | 0x0001u | 0x4000u, 0x56);
     }
 
     public void RegisterShortcut(string shortcut)
@@ -71,6 +75,11 @@ public sealed class NativeWindow : IDisposable
             HotkeyPressed?.Invoke(this, EventArgs.Empty);
             handled = true;
         }
+        if (message == WmHotkey && wParam.ToInt32() == ClipboardHotkeyId)
+        {
+            ClipboardHotkeyPressed?.Invoke(this, EventArgs.Empty);
+            handled = true;
+        }
         return IntPtr.Zero;
     }
 
@@ -80,6 +89,7 @@ public sealed class NativeWindow : IDisposable
         {
             RemoveClipboardFormatListener(_handle);
             UnregisterHotKey(_handle, HotkeyId);
+            UnregisterHotKey(_handle, ClipboardHotkeyId);
         }
         _source?.RemoveHook(WndProc);
     }

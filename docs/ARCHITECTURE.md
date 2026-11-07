@@ -1,8 +1,8 @@
 # Architecture
 
-The WPF `MainWindow` creates a transparent, topmost, taskbar-free overlay. It uses event-driven Win32 clipboard notifications, a registered global hotkey, display change events and Windows Global System Media Transport Controls sessions. Clipboard events trigger bounded retries. Media events refresh snapshot state. A one-second timeline timer runs only while the music panel is visible and a session is playing.
+The WPF `MainWindow` creates a transparent, topmost, taskbar-free overlay. It uses event-driven Win32 clipboard notifications, global shortcuts for the panel and quick clipboard, display change events and Windows Global System Media Transport Controls sessions. Clipboard events trigger bounded retries. Media events refresh snapshot state; timeline-only updates do not rebuild the visual tree. A one-second slider timer runs while the music panel is visible and a session is playing. A 100 ms activity timer updates compact media and focus progress only while one of those activities is running. Short local events use a separate expiry timer.
 
-`AppSettings.Validate` clamps persisted values before use. `LocalStorage` writes JSON to a temporary file and replaces the target on the same volume. History images are PNG files under `%LOCALAPPDATA%\AeroIsland\images`; history JSON holds only references. Image count and total bytes are bounded during persistence. No server, database or helper process is required.
+`AppSettings.Validate` clamps persisted values before use. The focus timer uses UTC deadlines and stores paused remaining time in memory; it is not restored after app restart. `LocalStorage` writes JSON to a temporary file and replaces the target on the same volume. History images are PNG files under `%LOCALAPPDATA%\AeroIsland\images`; history JSON holds only references. Image count and total bytes are bounded during persistence. No server, database or helper process is required.
 
 Single-instance coordination uses a local named mutex and a current-user-only named pipe. The second process sends an Open signal and exits. Native window hooks and WinRT subscriptions are removed on shutdown.
 
