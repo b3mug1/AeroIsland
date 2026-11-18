@@ -44,7 +44,6 @@ public partial class MainWindow
             if (_stopwatchLabel is not null) _stopwatchLabel.Text = time;
             if (_stopwatchActivityLabel is not null) _stopwatchActivityLabel.Text = time;
         };
-        SystemEvents.PowerModeChanged += OnPowerModeChanged;
     }
 
     private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
@@ -155,12 +154,14 @@ public partial class MainWindow
             Text = _liveActivity?.Title ?? "Activity ended", Foreground = Brushes.White,
             FontSize = 18, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis
         });
-        _page.Children.Add(new TextBlock
+        var detail = new TextBlock
         {
             Text = _liveActivity?.Detail, Foreground = new SolidColorBrush(Color.FromRgb(161, 161, 166)),
             FontSize = 13, Margin = new Thickness(0, 5, 0, 14), TextWrapping = TextWrapping.Wrap,
             MaxHeight = 42, TextTrimming = TextTrimming.CharacterEllipsis
-        });
+        };
+        if (_liveActivity?.Kind == LiveActivityKind.Stopwatch) _stopwatchActivityLabel = detail;
+        _page.Children.Add(detail);
         if (_liveActivity?.Progress is { } progress)
         {
             var track = new Grid { Height = 5, Margin = new Thickness(0, 0, 0, 15) };
