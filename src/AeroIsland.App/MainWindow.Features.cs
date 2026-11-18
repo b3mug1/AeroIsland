@@ -34,7 +34,7 @@ public partial class MainWindow
         _focusTimer.Phase != FocusTimerPhase.Idle ? CompactActivity.Focus :
         _snapshot?.IsPlaying == true ? CompactActivity.Music : CompactActivity.Idle;
 
-    private string ContextPage => _requestedPage ?? _transientPage ??
+    private string ContextPage => _requestedPage ?? (_liveActivity is not null ? "Activity" : null) ?? _transientPage ??
         (_focusTimer.Phase != FocusTimerPhase.Idle ? "Focus" :
         _snapshot?.IsPlaying == true ? "Music" : "Island");
 
@@ -53,7 +53,7 @@ public partial class MainWindow
             else
             {
                 ShowCompact(ForegroundBrush());
-                AnimateWindow(_settings.CapsuleWidth * _settings.Scale, 50 * _settings.Scale);
+                AnimateWindow(CompactWidth, CompactHeight);
             }
         };
     }
@@ -84,7 +84,7 @@ public partial class MainWindow
             return;
         }
         ShowCompact(ForegroundBrush());
-        AnimateWindow(Math.Max(_settings.CapsuleWidth, 310) * _settings.Scale, 58 * _settings.Scale);
+        AnimateWindow(CompactWidth, CompactHeight);
     }
 
     private void RefreshActivityTimer()
@@ -182,7 +182,7 @@ public partial class MainWindow
             Height = 146,
             StrokeWidth = 6,
             TrackBrush = Outline(),
-            ProgressBrush = Accent(),
+            ProgressBrush = ActivityOrange(),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
@@ -228,6 +228,7 @@ public partial class MainWindow
         _page.Children.Add(Label(_focusTimer.Phase == FocusTimerPhase.Paused ? "Paused. Resume whenever you are ready." :
             _focusTimer.Phase == FocusTimerPhase.Running ? "The timer keeps running while the panel is closed." :
             "Choose a duration to begin.", 11));
+        AddStopwatchControls();
         UpdateActivityVisuals();
     }
 
@@ -239,7 +240,7 @@ public partial class MainWindow
             Height = 31,
             StrokeWidth = 2.5,
             TrackBrush = Outline(),
-            ProgressBrush = Accent(),
+            ProgressBrush = ActivityOrange(),
             Progress = progress,
             VerticalAlignment = VerticalAlignment.Center
         };

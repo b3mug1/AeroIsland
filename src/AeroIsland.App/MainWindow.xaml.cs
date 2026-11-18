@@ -74,6 +74,7 @@ public partial class MainWindow : Window
         _media.MaxArtworkBytes = settings.ArtworkCacheMiB * 1024 * 1024;
         _capture = new ClipboardCapture(storage);
         InitializeActivity();
+        InitializeLiveActivities();
         BuildShell();
         SourceInitialized += OnSourceInitialized;
         Loaded += OnLoaded;
@@ -82,8 +83,8 @@ public partial class MainWindow : Window
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape) { Collapse(); e.Handled = true; } };
         MouseEnter += (_, _) => { if (!_expanded && _settings.HoverToExpand) { _hover.Interval = TimeSpan.FromMilliseconds(_settings.HoverDelayMs); _hover.Start(); } };
         MouseLeave += (_, _) => _hover.Stop();
-        SizeChanged += (_, _) => Place();
-        _hover.Tick += (_, _) => { _hover.Stop(); Open(); };
+        SizeChanged += (_, _) => { UpdateIslandGeometry(); Place(); };
+        _hover.Tick += (_, _) => { _hover.Stop(); OpenIsland(false); };
         _fullscreen.Tick += (_, _) => UpdateFullscreen();
         _timelineTimer.Tick += (_, _) => { if (_snapshot?.IsPlaying == true && _timeline is { } slider && slider.Value < slider.Maximum) slider.Value += 1; };
         _media.Changed += (_, state) => Dispatcher.InvokeAsync(() => ShowMedia(state));
@@ -94,6 +95,7 @@ public partial class MainWindow : Window
         Place();
         SystemEvents.DisplaySettingsChanged += OnDisplayChanged;
         _fullscreen.Start();
+        _audioPoll.Start();
         CreateTray();
         foreach (var item in await _storage.LoadHistoryAsync(_settings)) _history.Add(item);
         await _media.StartAsync();
@@ -152,19 +154,19 @@ public partial class MainWindow : Window
 
     private void BuildShell()
     {
-        var dark = _settings.Theme != IslandTheme.Light;
-        _surface.Background = new SolidColorBrush(dark ? Color.FromRgb(9, 9, 13) : Color.FromRgb(250, 249, 253));
+        _surface.Background = Brushes.Black;
         Resources["AccentBrush"] = Accent();
         Resources["OutlineBrush"] = Outline();
         Resources["PanelBrush"] = _surface.Background;
-        _surface.CornerRadius = new CornerRadius(_settings.CornerRadius);
+        _surface.CornerRadius = new CornerRadius(_expanded ? 40 : 22);
         _surface.BorderBrush = Outline();
-        _surface.BorderThickness = new Thickness(1);
+        _surface.BorderThickness = new Thickness(0);
         _surface.Opacity = _expanded ? 1 : _settings.Opacity;
         _surface.ClipToBounds = true;
         _surface.Child = _root;
         _root.Margin = new Thickness(18, 7, 18, 8);
         _root.ClipToBounds = true;
+        _root.LayoutTransform = new ScaleTransform(_settings.Scale, _settings.Scale);
         Content = _surface;
         if (_expanded)
         {
@@ -173,8 +175,8 @@ public partial class MainWindow : Window
         }
         else
         {
-            Width = _settings.CapsuleWidth * _settings.Scale;
-            Height = 50 * _settings.Scale;
+            Width = CompactWidth;
+            Height = CompactHeight;
             ShowCompact(ForegroundBrush());
         }
     }
@@ -191,150 +193,66 @@ public partial class MainWindow : Window
         _focusRing = null;
         _focusClock = null;
         _statusText = null;
-        var mode = CurrentActivity;
-        var grid = new Grid { Cursor = Cursors.Hand };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(37) });
+        _root.Margin = new Thickness(12, 5, 12, 5);
+        var grid = new Grid { Background = Brushes.Transparent, Cursor = Cursors.Hand };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition());
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        FrameworkElement mark;
-        if (mode is CompactActivity.Focus or CompactActivity.Music)
+        var mode = CurrentActivity;
+        if (_liveActivity is not null) BuildCompactLiveActivity(grid);
+        else if (mode == CompactActivity.Music)
         {
-            var display = new Grid { Width = 31, Height = 31, VerticalAlignment = VerticalAlignment.Center };
-            var progress = mode == CompactActivity.Focus
-                ? _focusTimer.Progress(DateTimeOffset.UtcNow)
-                : _snapshot is { Duration: { Ticks: > 0 } } media
-                    ? Math.Clamp(media.Position.TotalMilliseconds / media.Duration.TotalMilliseconds, 0, 1) : 0;
-            display.Children.Add(CreateCompactRing(progress));
-            if (mode == CompactActivity.Music && _artworkSource is not null)
+            grid.Children.Add(AlbumArtwork(28));
+            var wave = CreateWaveform(26, 20);
+            Grid.SetColumn(wave, 2);
+            grid.Children.Add(wave);
+        }
+        else if (mode == CompactActivity.Focus)
+        {
+            var ring = CreateCompactRing(_focusTimer.Progress(DateTimeOffset.UtcNow));
+            ring.Width = 24; ring.Height = 24;
+            grid.Children.Add(ring);
+            _compactClock = new TextBlock
             {
-                display.Children.Add(new Border
-                {
-                    Width = 22,
-                    Height = 22,
-                    CornerRadius = new CornerRadius(11),
-                    Background = new ImageBrush(_artworkSource) { Stretch = Stretch.UniformToFill },
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                });
-            }
-            else display.Children.Add(new TextBlock
-            {
-                Text = mode == CompactActivity.Focus ? "●" : "♫",
-                Foreground = Accent(),
-                FontSize = mode == CompactActivity.Focus ? 12 : 16,
-                HorizontalAlignment = HorizontalAlignment.Center,
+                Text = FormatRemaining(_focusTimer.Remaining(DateTimeOffset.UtcNow)),
+                Foreground = ActivityOrange(), FontSize = 15,
                 VerticalAlignment = VerticalAlignment.Center
-            });
-            mark = display;
+            };
+            Grid.SetColumn(_compactClock, 2);
+            grid.Children.Add(_compactClock);
         }
         else if (mode == CompactActivity.Event)
-            mark = new Border
+        {
+            grid.Children.Add(new TextBlock
             {
-                Width = 27,
-                Height = 27,
-                CornerRadius = new CornerRadius(14),
-                Background = AccentSoft(),
-                Child = new TextBlock
-                {
-                    Text = "✓", Foreground = Accent(), FontSize = 15,
-                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-                }
-            };
-        else mark = BrandMark(27);
-        Grid.SetColumn(mark, 0);
-        grid.Children.Add(mark);
-        var titleStack = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        var title = new TextBlock
-        {
-            Text = mode switch
-            {
-                CompactActivity.Event => _transientMessage ?? "AeroIsland",
-                CompactActivity.Focus => FormatRemaining(_focusTimer.Remaining(DateTimeOffset.UtcNow)),
-                CompactActivity.Music => _snapshot?.Title is { Length: > 0 } track ? track : "Now playing",
-                _ => "AeroIsland"
-            },
-            Foreground = foreground,
-            FontSize = 12,
-            FontWeight = FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = Math.Max(80, Width - 100)
-        };
-        if (mode == CompactActivity.Focus) _compactClock = title;
-        titleStack.Children.Add(title);
-        titleStack.Children.Add(new TextBlock
-        {
-            Text = mode switch
-            {
-                CompactActivity.Event => "AEROISLAND",
-                CompactActivity.Focus => _focusTimer.Phase == FocusTimerPhase.Paused ? "FOCUS PAUSED" : "FOCUS SESSION",
-                CompactActivity.Music => _snapshot?.Artist.ToUpperInvariant() ?? "MEDIA",
-                _ => "READY WHEN YOU ARE"
-            },
-            Foreground = Muted(),
-            FontSize = 8,
-            FontWeight = FontWeights.SemiBold,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = Math.Max(80, Width - 100)
-        });
-        Grid.SetColumn(titleStack, 1);
-        grid.Children.Add(titleStack);
-        var activity = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-        if (mode == CompactActivity.Focus)
-        {
-            var toggle = Button(_focusTimer.Phase == FocusTimerPhase.Running ? "Ⅱ" : "▶", ToggleFocus);
-            toggle.Width = 28; toggle.Height = 28;
-            toggle.Padding = new Thickness(0); toggle.Margin = new Thickness(0);
-            toggle.Background = AccentSoft(); toggle.Foreground = Accent();
-            AutomationProperties.SetName(toggle, _focusTimer.Phase == FocusTimerPhase.Running ? "Pause focus timer" : "Resume focus timer");
-            activity.Children.Add(toggle);
+                Text = "✓", Foreground = ActivityGreen(), FontSize = 19,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(3, 0, 12, 0)
+            });
+            var message = Label(_transientMessage ?? "Activity", 13, true);
+            message.VerticalAlignment = VerticalAlignment.Center;
+            message.TextWrapping = TextWrapping.NoWrap;
+            message.TextTrimming = TextTrimming.CharacterEllipsis;
+            Grid.SetColumn(message, 1);
+            grid.Children.Add(message);
         }
-        else if (mode == CompactActivity.Music && _snapshot?.CanPlayPause == true)
-        {
-            var toggle = Button("Ⅱ", async () => await SafeMediaAsync(_media.ToggleAsync));
-            toggle.Width = 28; toggle.Height = 28;
-            toggle.Padding = new Thickness(0); toggle.Margin = new Thickness(0);
-            toggle.Background = AccentSoft(); toggle.Foreground = Accent();
-            AutomationProperties.SetName(toggle, "Pause music");
-            activity.Children.Add(toggle);
-        }
-        else
-        {
-        var dot = new Border
-        {
-            Width = 6,
-            Height = 6,
-            CornerRadius = new CornerRadius(3),
-            Background = Accent(),
-            Margin = new Thickness(0, 0, 8, 0),
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        if (_snapshot?.IsPlaying == true && MotionEnabled)
-        {
-            dot.BeginAnimation(OpacityProperty, new DoubleAnimation(0.3, 1, TimeSpan.FromMilliseconds(680))
-            { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
-        }
-        activity.Children.Add(dot);
-        var chevron = new TextBlock
-        {
-            Text = "⌄",
-            Foreground = Accent(),
-            FontSize = 18,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(8, -5, 0, 0)
-        };
-        activity.Children.Add(chevron);
-        }
-        Grid.SetColumn(activity, 2);
-        grid.Children.Add(activity);
+        // Inactive islands intentionally contain no branding or decorative controls.
         _root.Children.Add(grid);
-        grid.MouseLeftButtonUp += (_, e) => { if (!IsInsideButton(e.OriginalSource as DependencyObject)) Open(); };
-        AutomationProperties.SetName(grid, "AeroIsland. Open controls");
+        grid.MouseLeftButtonUp += (_, _) => Open();
+        AutomationProperties.SetName(grid, mode switch
+        {
+            CompactActivity.Music => $"Now playing: {_snapshot?.Title}, {_snapshot?.Artist}. Open player",
+            CompactActivity.Focus => "Focus timer. Open timer controls",
+            CompactActivity.Event => $"{_transientMessage}. Open activity",
+            _ => "Dynamic Island. Open controls"
+        });
         if (animate) FadeIn(_root, 0);
         else { _root.BeginAnimation(OpacityProperty, null); _root.Opacity = 1; }
         UpdateActivityVisuals();
     }
 
-    public void Open()
+    public void Open() => OpenIsland(true);
+
+    private void OpenIsland(bool activate)
     {
         _hiddenToTray = false;
         if (!_expanded)
@@ -346,42 +264,36 @@ public partial class MainWindow : Window
             _transientPage = null;
             _expanded = true;
             _surface.Opacity = 1;
-            _surface.Effect = new DropShadowEffect
-            {
-                BlurRadius = 24,
-                ShadowDepth = 8,
-                Direction = 270,
-                Opacity = _settings.Theme == IslandTheme.Light ? 0.16 : 0.33,
-                Color = Colors.Black
-            };
+            _surface.Effect = null;
             ShowExpanded();
             AnimateWindow(420 * _settings.Scale, PageHeight(_activePage) * _settings.Scale, spring: true);
         }
         Show();
-        Activate();
+        if (activate) Activate();
     }
 
     private void Collapse()
     {
         if (!_expanded) return;
         _expanded = false;
+        _surface.Background = Brushes.Black;
         _surface.Opacity = _settings.Opacity;
         _media.TimelineUpdatesEnabled = false;
         _timelineTimer.Stop();
-        ShowCompact(_settings.Theme == IslandTheme.Light ? Brushes.Black : Brushes.White);
-        AnimateWindow((_transientMessage is null ? _settings.CapsuleWidth : Math.Max(_settings.CapsuleWidth, 310)) * _settings.Scale,
-            (_transientMessage is null ? 50 : 58) * _settings.Scale);
+        ShowCompact(Brushes.White);
+        AnimateWindow(CompactWidth, CompactHeight);
         _surface.Effect = null;
     }
 
     private bool MotionEnabled => _settings.AnimationsEnabled && !_settings.ReducedMotion &&
         _settings.AnimationDurationMs > 0 && !(_fullscreenActive && _settings.FullscreenBehavior == FullscreenBehavior.PauseAnimations);
 
-    private static double PageHeight(string page) => page switch
+    private double PageHeight(string page) => page switch
     {
         "Island" => 490,
         "Focus" => 454,
-        "Music" => 390,
+        "Music" => _media.SessionIds.Count > 1 ? 300 : 216,
+        "Activity" => 260,
         "Clipboard" => 530,
         "Settings" => 540,
         _ => 416
@@ -399,7 +311,9 @@ public partial class MainWindow : Window
             return;
         }
         var duration = TimeSpan.FromMilliseconds(_settings.AnimationDurationMs * (spring ? 1.1 : 1));
-        IEasingFunction easing = new SineEase { EasingMode = EasingMode.EaseInOut };
+        IEasingFunction easing = spring
+            ? new IslandSpringEase()
+            : new CubicEase { EasingMode = EasingMode.EaseOut };
         BeginAnimation(WidthProperty, new DoubleAnimation(targetWidth, duration) { EasingFunction = easing }, HandoffBehavior.SnapshotAndReplace);
         BeginAnimation(HeightProperty, new DoubleAnimation(targetHeight, duration) { EasingFunction = easing }, HandoffBehavior.SnapshotAndReplace);
     }
@@ -422,6 +336,7 @@ public partial class MainWindow : Window
 
     private void ShowExpanded()
     {
+        _root.Margin = new Thickness(24, 16, 24, 18);
         _compactRing = null;
         _compactClock = null;
         if (_pageScroll is not null) _pageScroll.Content = null;
@@ -431,17 +346,17 @@ public partial class MainWindow : Window
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         _root.RowDefinitions.Add(new RowDefinition());
-        var header = new Grid { Margin = new Thickness(0, 4, 0, 17) };
+        var header = new Grid { Name = "IslandHeader", Margin = new Thickness(0, 4, 0, 17) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(41) });
         header.ColumnDefinitions.Add(new ColumnDefinition());
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var mark = BrandMark(32);
+        var mark = BrandMark(28);
         Grid.SetColumn(mark, 0);
         header.Children.Add(mark);
         var brand = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        brand.Children.Add(new TextBlock { Text = "AEROISLAND", Foreground = ForegroundBrush(), FontSize = 12, FontWeight = FontWeights.Bold });
-        brand.Children.Add(new TextBlock { Text = "DESKTOP COMPANION", Foreground = Muted(), FontSize = 8, FontWeight = FontWeights.SemiBold });
+        brand.Children.Add(new TextBlock { Text = "Island", Foreground = ForegroundBrush(), FontSize = 12, FontWeight = FontWeights.Bold });
+        brand.Children.Add(new TextBlock { Text = "Your activities", Foreground = Muted(), FontSize = 8, FontWeight = FontWeights.SemiBold });
         Grid.SetColumn(brand, 1);
         header.Children.Add(brand);
         var status = new Border
@@ -521,8 +436,14 @@ public partial class MainWindow : Window
     {
         var changed = _activePage != page;
         _activePage = page;
+        var player = page is "Music" or "Activity";
+        _surface.Background = !player && _settings.Theme == IslandTheme.Light ? Brushes.White : Brushes.Black;
+        if (_root.Children.OfType<Grid>().FirstOrDefault(x => x.Name == "IslandHeader") is { } header)
+            header.Visibility = player ? Visibility.Collapsed : Visibility.Visible;
+        _root.Margin = player ? new Thickness(24, 22, 24, 18) : new Thickness(24, 16, 24, 18);
+
         if (page != "Clipboard") _quickClipboardMode = false;
-        if (_tabsShell is not null) _tabsShell.Visibility = _quickClipboardMode ? Visibility.Collapsed : Visibility.Visible;
+        if (_tabsShell is not null) _tabsShell.Visibility = (_quickClipboardMode || player) ? Visibility.Collapsed : Visibility.Visible;
         _media.TimelineUpdatesEnabled = _expanded && page == "Music";
         if (page != "Music") { _timelineTimer.Stop(); _timeline = null; }
         _focusRing = null;
@@ -549,6 +470,7 @@ public partial class MainWindow : Window
             case "Island": ShowIsland(); break;
             case "Focus": ShowFocus(); break;
             case "Music": ShowMusic(); break;
+            case "Activity": ShowLiveActivity(); break;
             case "Clipboard": ShowClipboard(); break;
             case "Settings": ShowSettings(); break;
         }
@@ -645,96 +567,6 @@ public partial class MainWindow : Window
         footer.Children.Add(local);
         _page.Children.Add(footer);
         FadeIn(footer, 6, 250);
-    }
-
-    private void ShowMusic()
-    {
-        PageHeading("MEDIA CONTROL", "Your music", "Playback, without leaving your flow.");
-        if (_snapshot is null)
-        {
-            _timelineTimer.Stop();
-            _timeline = null;
-            var empty = new StackPanel { Margin = new Thickness(20, 18, 20, 18), HorizontalAlignment = HorizontalAlignment.Center };
-            empty.Children.Add(new TextBlock
-            {
-                Text = "♪",
-                Foreground = Accent(),
-                FontSize = 36,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 10)
-            });
-            empty.Children.Add(new TextBlock
-            {
-                Text = "Nothing playing yet",
-                Foreground = ForegroundBrush(),
-                FontSize = 16,
-                FontWeight = FontWeights.SemiBold,
-                HorizontalAlignment = HorizontalAlignment.Center
-            });
-            empty.Children.Add(new TextBlock
-            {
-                Text = "Open a player with a Windows media session.",
-                Foreground = Muted(),
-                FontSize = 11,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 5, 0, 0)
-            });
-            _page.Children.Add(new Border
-            {
-                Child = empty,
-                Background = Surface2(),
-                BorderBrush = Outline(),
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(16),
-                Margin = new Thickness(0, 10, 0, 0)
-            });
-            return;
-        }
-        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 10) };
-        var artwork = new Border
-        {
-            Width = 72,
-            Height = 72,
-            CornerRadius = new CornerRadius(17),
-            Margin = new Thickness(0, 0, 14, 0),
-            Background = _artworkSource is null ? AccentSoft() : new ImageBrush(_artworkSource) { Stretch = Stretch.UniformToFill }
-        };
-        if (_artworkSource is null)
-            artwork.Child = new TextBlock
-            {
-                Text = "♫", FontSize = 31, Foreground = Accent(),
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center
-            };
-        RenderOptions.SetBitmapScalingMode(artwork, BitmapScalingMode.HighQuality);
-        row.Children.Add(artwork);
-        var track = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
-        track.Children.Add(new TextBlock { Text = _snapshot.Title, FontWeight = FontWeights.SemiBold, Foreground = ForegroundBrush(), TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 });
-        track.Children.Add(new TextBlock { Text = _snapshot.Artist, Foreground = Muted(), TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 240 });
-        row.Children.Add(track);
-        _page.Children.Add(row);
-        FadeIn(row, 8, 40);
-        var controls = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
-        var previous = Button("⏮", async () => await SafeMediaAsync(_media.PreviousAsync)); previous.IsEnabled = _snapshot.CanPrevious;
-        var play = Button(_snapshot.IsPlaying ? "⏸" : "▶", async () => await SafeMediaAsync(_media.ToggleAsync)); play.IsEnabled = _snapshot.CanPlayPause;
-        play.Background = Accent(); play.Foreground = AccentInk();
-        var next = Button("⏭", async () => await SafeMediaAsync(_media.NextAsync)); next.IsEnabled = _snapshot.CanNext;
-        foreach (var button in new[] { previous, play, next }) { button.Margin = new Thickness(5); controls.Children.Add(button); }
-        _page.Children.Add(controls);
-        var timeline = new Slider
-        {
-            Minimum = 0,
-            Maximum = Math.Max(1, _snapshot.Duration.TotalSeconds),
-            IsEnabled = _snapshot.CanSeek,
-            Style = (Style)FindResource("IslandSlider")
-        };
-        timeline.Value = Math.Clamp(_snapshot.Position.TotalSeconds, 0, timeline.Maximum);
-        timeline.PreviewMouseLeftButtonUp += async (_, _) => await SafeMediaAsync(() => _media.SeekAsync(TimeSpan.FromSeconds(timeline.Value)));
-        _timeline = timeline;
-        if (_settings.ShowTimeline) _page.Children.Add(timeline);
-        ChoiceField("Media source", _media.SessionIds, _snapshot.SessionId,
-            id => { _media.ChooseSession(id); return Task.CompletedTask; });
-        if (_snapshot.IsPlaying && _settings.ShowTimeline) _timelineTimer.Start();
-        else _timelineTimer.Stop();
     }
 
     private async Task SafeMediaAsync(Func<Task> command)
@@ -1339,8 +1171,8 @@ public partial class MainWindow : Window
 
     private void AnimateCard(Border card, bool hovered)
     {
-        var target = hovered ? (_settings.Theme == IslandTheme.Light ? Color.FromRgb(235, 231, 247) : Color.FromRgb(37, 34, 49))
-            : (_settings.Theme == IslandTheme.Light ? Color.FromRgb(242, 239, 249) : Color.FromRgb(24, 23, 31));
+        var target = hovered ? (_settings.Theme == IslandTheme.Light ? Color.FromRgb(235, 231, 247) : Color.FromRgb(44, 44, 46))
+            : (_settings.Theme == IslandTheme.Light ? Color.FromRgb(242, 239, 249) : Color.FromRgb(28, 28, 30));
         if (card.Background is not SolidColorBrush brush) return;
         if (!MotionEnabled) { brush.Color = target; return; }
         brush.BeginAnimation(SolidColorBrush.ColorProperty,
@@ -1384,13 +1216,13 @@ public partial class MainWindow : Window
         return luminance > 150 ? new SolidColorBrush(Color.FromRgb(15, 14, 21)) : Brushes.White;
     }
     private Brush Outline() => new SolidColorBrush(_settings.Theme == IslandTheme.Light
-        ? Color.FromRgb(219, 213, 231) : Color.FromRgb(48, 46, 57));
+        ? Color.FromRgb(219, 213, 231) : Color.FromRgb(44, 44, 46));
     private Brush Surface2() => new SolidColorBrush(_settings.Theme == IslandTheme.Light
-        ? Color.FromRgb(242, 239, 249) : Color.FromRgb(24, 23, 31));
+        ? Color.FromRgb(242, 239, 249) : Color.FromRgb(28, 28, 30));
     private Brush ForegroundBrush() => new SolidColorBrush(_settings.Theme == IslandTheme.Light
-        ? Color.FromRgb(32, 29, 42) : Color.FromRgb(247, 245, 252));
+        ? Color.FromRgb(32, 29, 42) : Color.FromRgb(255, 255, 255));
     private Brush Muted() => new SolidColorBrush(_settings.Theme == IslandTheme.Light
-        ? Color.FromRgb(105, 100, 117) : Color.FromRgb(157, 153, 171));
+        ? Color.FromRgb(105, 100, 117) : Color.FromRgb(161, 161, 166));
 
     private async Task SaveSettingsAsync() => await _storage.SaveSettingsAsync(_settings);
 
@@ -1444,8 +1276,11 @@ public partial class MainWindow : Window
         if (fullscreen && !_fullscreenActive && _settings.FullscreenBehavior == FullscreenBehavior.PauseAnimations)
         {
             var currentHeight = ActualHeight;
+            var currentWidth = ActualWidth;
             BeginAnimation(HeightProperty, null);
+            BeginAnimation(WidthProperty, null);
             Height = currentHeight;
+            Width = currentWidth;
         }
         _fullscreenActive = fullscreen;
         if (_settings.FullscreenBehavior == FullscreenBehavior.Hide)
@@ -1470,6 +1305,8 @@ public partial class MainWindow : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
+        SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        _liveActivityExpiry.Stop(); _stopwatchTick.Stop(); _audioPoll.Stop();
         _hover.Stop(); _fullscreen.Stop(); _timelineTimer.Stop(); _activityTimer.Stop(); _transientTimer.Stop();
         _native?.Dispose(); _media.Dispose();
         if (_tray is not null) { _tray.Visible = false; _tray.Dispose(); }

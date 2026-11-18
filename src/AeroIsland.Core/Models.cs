@@ -18,8 +18,8 @@ public sealed record AppSettings
     public string MonitorDeviceName { get; init; } = "";
     public ScreenEdge ScreenEdge { get; init; } = ScreenEdge.Top;
     public IslandTheme Theme { get; init; } = IslandTheme.Dark;
-    public string AccentColor { get; init; } = "#B9A6FF";
-    public int CapsuleWidth { get; init; } = 220;
+    public string AccentColor { get; init; } = "#FFFFFF";
+    public int CapsuleWidth { get; init; } = 200;
     public double Scale { get; init; } = 1;
     public int CornerRadius { get; init; } = 28;
     public double Opacity { get; init; } = 1;

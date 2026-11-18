@@ -77,6 +77,29 @@ public sealed class SettingsLayoutTests
                 compact.Arrange(new Rect(0, 0, 220, 50));
                 compact.UpdateLayout();
                 SavePreview(compact, "Compact-Music", previewDirectory, 220, 50);
+                typeof(MainWindow).GetField("_expanded", flags)!.SetValue(window, true);
+                typeof(MainWindow).GetMethod("ShowExpanded", flags)!.Invoke(window, null);
+                typeof(MainWindow).GetMethod("ShowPage", flags)!.Invoke(window, ["Music"]);
+                var player = (FrameworkElement)window.Content;
+                var surface = Assert.IsType<System.Windows.Controls.Border>(player);
+                Assert.Equal(Colors.Black, Assert.IsType<SolidColorBrush>(surface.Background).Color);
+                Assert.Equal(new Thickness(0), surface.BorderThickness);
+                Assert.False(window.ShowActivated);
+                player.Measure(new Size(420, 216));
+                player.Arrange(new Rect(0, 0, 420, 216));
+                player.UpdateLayout();
+                SavePreview(player, "Expanded-Music", previewDirectory, 420, 216);
+                foreach (var kind in Enum.GetValues<LiveActivityKind>())
+                {
+                    window.ReportActivity(new LiveActivity(kind, kind + " activity", "Activity details", 0.62));
+                    typeof(MainWindow).GetMethod("ShowPage", flags)!.Invoke(window, ["Activity"]);
+                    player.Measure(new Size(420, 260));
+                    player.Arrange(new Rect(0, 0, 420, 260));
+                    player.UpdateLayout();
+                    SavePreview(player, "Live-" + kind, previewDirectory, 420, 260);
+                }
+                window.DismissLiveActivity();
+                typeof(MainWindow).GetField("_expanded", flags)!.SetValue(window, false);
                 typeof(MainWindow).GetMethod("ShowMedia", flags)!.Invoke(window, [null]);
                 typeof(MainWindow).GetMethod("ShowTransient", flags)!.Invoke(window, ["Copied to clipboard", "Clipboard"]);
                 var contextPage = (string)typeof(MainWindow).GetProperty("ContextPage", flags)!.GetValue(window)!;

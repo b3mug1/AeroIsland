@@ -7,6 +7,16 @@ namespace AeroIsland.UnitTests;
 public sealed class CoreTests
 {
     [Fact]
+    public void Activity_data_bounds_untrusted_text_and_progress()
+    {
+        var activity = new LiveActivity(LiveActivityKind.Download, new string('a', 500), new string('b', 600), 2).Validate();
+        Assert.Equal(160, activity.Title.Length);
+        Assert.Equal(300, activity.Detail.Length);
+        Assert.Equal(1d, activity.Progress);
+        Assert.Null(new LiveActivity(LiveActivityKind.Volume, "Volume", "", double.NaN).Validate().Progress);
+    }
+
+    [Fact]
     public void Settings_are_clamped_and_nonfinite_values_recovered()
     {
         var settings = new AppSettings { CapsuleWidth = 999, Opacity = double.NaN, MaxHistoryItems = -4, AccentColor = "red" }.Validate();
