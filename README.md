@@ -4,9 +4,10 @@ AeroIsland is a Windows 10/11 x64 desktop capsule built with C#, WPF and .NET 10
 
 ## Status
 
-Release x64 build and nine automated tests passed on the authoring Windows host with .NET SDK 10.0.403. Version 0.2.0 adds a contextual capsule, a focus timer, compact music artwork and progress, quick clipboard access, and short activity events. Expansion uses longer, smoother easing; reduced motion disables transitions. Static WPF renders of the main, focus, clipboard, music, settings, and compact states were inspected. Process-start, single-instance, and silent install/uninstall smoke checks passed. Live desktop interaction, mixed-DPI, real media playback, clipboard notifications, and performance acceptance scenarios remain unverified.
+Version 0.3.0 redesigns the overlay with compact, expanded music, and live-activity presentations. The Release build and eleven automated tests passed. Static WPF renders were inspected. Battery and volume have Windows adapters; microphone, recording, download, and notification presentations require events from an integration. See [design and integration details](docs/DESIGN.md).
 
-Download the [AeroIsland 0.2.0 installer](https://github.com/b3mug1/AeroIsland/releases/download/v0.2.0/AeroIsland-Setup-0.2.0-win-x64.exe). It requires the .NET 10 Desktop Runtime.
+Local release packages are `installer/output/AeroIsland-Setup-0.3.0-win-x64.exe` and `installer/output/AeroIsland-0.3.0-win-x64-portable.zip`. Both include the .NET runtime. A GitHub release for 0.3.0 has not been published by this packaging step. The previous published version is [AeroIsland 0.2.0](https://github.com/b3mug1/AeroIsland/releases/tag/v0.2.0).
+
 
 ## Build
 
@@ -16,10 +17,10 @@ Install the .NET 10 SDK on Windows 10 19041+ or Windows 11. From the repository 
 dotnet restore AeroIsland.slnx
 dotnet build AeroIsland.slnx -c Release
 dotnet test AeroIsland.slnx -c Release
-dotnet publish src/AeroIsland.App/AeroIsland.App.csproj -c Release -r win-x64 --self-contained false
+dotnet publish src/AeroIsland.App/AeroIsland.App.csproj -c Release -r win-x64 --self-contained true -o artifacts/release/0.3.0/win-x64
 ```
 
-Run `src/AeroIsland.App/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/AeroIsland.App.exe`. The framework-dependent build needs the .NET 10 Desktop Runtime. For a larger self-contained package, publish with `--self-contained true`; trimming, AOT and single-file publishing are deliberately not enabled.
+Run `artifacts/release/0.3.0/win-x64/AeroIsland.App.exe`. The self-contained package does not require a separate .NET Desktop Runtime installation. Trimming, AOT, and single-file publishing are not enabled.
 
 To build the per-user installer, install [Inno Setup 6](https://jrsoftware.org/isdl.php), then run its compiler from the repository root:
 
@@ -27,11 +28,11 @@ To build the per-user installer, install [Inno Setup 6](https://jrsoftware.org/i
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\AeroIsland.iss
 ```
 
-Adjust the compiler path if Inno Setup is installed elsewhere. The current installer is `installer/output/AeroIsland-Setup-0.2.0-win-x64.exe` (SHA-256 `4E630F95A000E18E8EB8E8A984C59BA6ED50534F4B4032EC87F94C700C7E0733`). The installer is unsigned.
+Adjust the compiler path if Inno Setup is installed elsewhere. The current unsigned installer is `installer/output/AeroIsland-Setup-0.3.0-win-x64.exe`.
 
 ## Publishing on GitHub
 
-The repository contains source code and build instructions. Build outputs, local NuGet packages, runtime data and the installer are excluded by `.gitignore`. Upload the installer as an asset of a GitHub Release if you want people to download it; it is not included when they clone the repository. The installer requires the .NET 10 Desktop Runtime.
+The repository contains source code and build instructions. Build outputs, local NuGet packages, runtime data and the installer are excluded by `.gitignore`. Upload the installer as an asset of a GitHub Release if you want people to download it; it is not included when they clone the repository. Version 0.3.0 packages include the .NET runtime.
 
 No `LICENSE` file is included. Select a license before presenting this repository as open source.
 
@@ -39,7 +40,7 @@ No `LICENSE` file is included. Select a license before presenting this repositor
 
 - Click the capsule or press Ctrl+Alt+Space to expand. Escape or clicking elsewhere collapses it.
 - The compact capsule follows the active focus timer or playing media. Clicking it opens the related controls.
-- Start a 5, 25 or 50 minute focus session on the Focus page. Pause or resume from the compact capsule.
+- Start a 5, 25 or 50 minute focus session on the Focus page. Click the compact capsule to pause or resume on the Focus page.
 - Music controls operate only on compatible Windows media sessions and only when the session enables the command.
 - Clipboard history starts **off**. Enable it on the Clipboard page. Pause, clear, pin, search and copy saved items there. Press Ctrl+Alt+V for a compact view of the three newest items; searching reaches older items.
 - A saved clipboard item or finished focus session briefly expands the capsule with a short status message. The clipboard contents are not shown in the always-visible compact state.
