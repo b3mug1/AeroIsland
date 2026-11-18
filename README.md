@@ -6,7 +6,7 @@ AeroIsland is a Windows 10/11 x64 desktop capsule built with C#, WPF and .NET 10
 
 Version 0.3.0 redesigns the overlay with compact, expanded music, and live-activity presentations. The Release build and eleven automated tests passed. Static WPF renders were inspected. Battery and volume have Windows adapters; microphone, recording, download, and notification presentations require events from an integration. See [design and integration details](docs/DESIGN.md).
 
-Local release packages are `installer/output/AeroIsland-Setup-0.3.0-win-x64.exe` and `installer/output/AeroIsland-0.3.0-win-x64-portable.zip`. Both include the .NET runtime. A GitHub release for 0.3.0 has not been published by this packaging step. The previous published version is [AeroIsland 0.2.0](https://github.com/b3mug1/AeroIsland/releases/tag/v0.2.0).
+Local release packages are `installer/output/AeroIsland-Setup-0.3.0-win-x64.exe` and `installer/output/AeroIsland-0.3.0-win-x64-portable.zip`. Both include the .NET runtime. Download the [AeroIsland 0.3.0 release](https://github.com/b3mug1/AeroIsland/releases/tag/v0.3.0), including the installer, portable archive, and SHA-256 checksums.
 
 
 ## Build
